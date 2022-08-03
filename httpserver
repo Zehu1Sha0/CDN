@@ -1,0 +1,241 @@
+#!/usr/bin/env python3
+import gzip
+import os
+import socket
+import sys
+import time
+import urllib.request
+import re
+from urllib.error import HTTPError
+from urllib.parse import quote
+import hashlib
+
+
+def update_sha(filepath, sha):
+    """
+    calculate file path.
+    :param filepath: the path of the cached file
+    :param sha: encoding algorithm
+    :return: the actual path.
+    """
+    sha.update(filepath.encode('utf-8'))
+    return sha.hexdigest()
+
+
+def extract_url(body):
+    """
+    Extract url from response body.
+    :param body: the response body
+    :return: request url
+    """
+    req = body.split("\r\n\r\n")[0].split("\r\n")[0].split(' ')
+    if req[0] != 'GET':
+        return ''
+    return req[1]
+
+
+def rtt(ip_address):
+    """
+    return the round trip time of current server and the client.
+    :param ip_address:
+    :return: the round trip time
+    """
+    os.system('scamper -c "ping -c 1 " -i ' + ip_address + ' > ./rtt')
+    f = open('./rtt')
+    data = f.read()
+    ret = re.search('time=.* ms', data)
+    if ret is None:
+        return "Fail."
+    ret = ret.group(0)
+    ret = ret.replace("time=", "").replace(" ms", "") + '\r\n'
+    return bytes(ret, 'utf-8')
+
+
+class CacheStorage:
+    """
+    Cache Storage manage the local store and the in memory store of the current server.
+    The store will keep the most frequently visited web cache in memory (Python Dict) and the recent replaced cache
+    to be a compressed file in the local storage folder.
+    """
+    # 20 Megabytes Threshold
+    THRESH_HOLD = 1024 * 1024 * 20
+
+    def __init__(self):
+        """
+        in_memory_store is the in memory python dictionary. It records the most frequent famous web content.
+        dict[url] = {time, hit, content}
+        local_store is the in disk dictionary mapping from url content to local compressed cache file.
+        dict[url] = {time, hit, path}
+        """
+        self.in_memory_store = {}
+        self.in_memory_store_size = 0
+        self.in_disk_store = []
+        self.compressed_storage_folder = './cache/'
+        for filename in os.listdir(self.compressed_storage_folder):
+            f = os.path.join(self.compressed_storage_folder, filename)
+            if os.path.isfile(f):
+                self.in_disk_store.append(filename)
+
+    def _find_least_popular_memory(self):
+        """
+        Replace the less hit content for a period of time at in-memory store. (LFU)
+        :return: the url that need to be replaced.
+        """
+        ret_url = ""
+        mini_hit = 2 ^ 32
+        for url, x in self.in_memory_store.items():
+            if mini_hit > x['hit']:
+                ret_url = url
+                mini_hit = x['hit']
+        return ret_url
+
+    def _memory_cache_replace(self, size):
+        """
+        Once the in_memory_store reach a threshold. The cache replace will be called for the local compression file
+        replacement. It works in another thread along with the caching function.
+        """
+        while size + self.in_memory_store_size > CacheStorage.THRESH_HOLD:
+            url = self._find_least_popular_memory()
+            entry = self.in_memory_store[url]
+            self.in_memory_store.pop(url)
+            self.in_memory_store_size -= len(entry['content'])
+
+    def _read_from_disk(self, url):
+        """
+        Read stored cache from disk. The user should be encoded with base64 to avoid conflicts.
+        :param url: url to fetch.
+        :return: the data from the disk.
+        """
+        post_url = update_sha(url[1:], hashlib.sha1())
+        file = gzip.open(self.compressed_storage_folder + post_url + '.gz', 'rb')
+        data = file.read()
+        file.close()
+        return data
+
+    def _check_url(self, url):
+        """
+        check whether current url is in in-disk store.
+        :param url: the url for checking
+        :return: whether in-disk or not
+        """
+        if update_sha(url[1:], hashlib.sha1()) + '.gz' in self.in_disk_store:
+            return True
+        return False
+
+    def cache(self, url, content):
+        """
+        Caching the content into the in_memory store. If data above the threshold, replace the least popular content
+        with current caching content.
+        :param url: the url for caching.
+        :param content: the content for caching.
+        :return:
+        """
+        content_size = len(content)
+        if self.in_memory_store_size + content_size > self.THRESH_HOLD:
+            self._memory_cache_replace(content_size)
+        self.in_memory_store[url] = {'time': time.time(), 'hit': 1, 'content': content}
+        self.in_memory_store_size += content_size
+
+    def check(self, url):
+        """
+        Check whether the url is in memory or in local disk.
+        :param url:
+        :return:
+        """
+        if url in self.in_memory_store or self._check_url(url):
+            return True
+        return False
+
+    def get(self, url):
+        """
+        Get the cached file content from url.
+        :param url: the url for caching.
+        :return: the content of the url
+        """
+        if url in self.in_memory_store:
+            former = self.in_memory_store[url]
+            self.in_memory_store[url] = {'time': time.time(), 'hit': former['hit'] + 1, 'content': former['content']}
+            return former['content']
+        if self._check_url(url):
+            data = self._read_from_disk(url)
+            return data
+
+
+class HTTPServer:
+
+    def __init__(self, port, origin):
+        """
+        Start the HTTP server with port and original server.
+        :param port: the port to start
+        :param origin: the original server to fetch url.
+        """
+        self.store = CacheStorage()
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # bind the socket to local host at start.
+        self.socket.bind(('', int(port)))
+        # listen to 1 request.
+        self.socket.listen(1)
+        self.origin = origin
+
+    def req(self, url):
+        """
+        Get the request url to gzip format. Send it with the compressed format.
+        :param url: the url for caching.
+        :return: the request body.
+        """
+        req_body = 'http://' + self.origin + ':8080' + urllib.parse.quote(url)
+        return urllib.request.urlopen(req_body).read()
+
+    def answer(self, url):
+        """
+        Answer the target url with the url fetch from original server or from cache.
+        :param url: the url that need to be return to the server.
+        :return: the content of the data.
+        """
+        if self.store.check(url):
+            return self.store.get(url)
+        else:
+            data = self.req(url)
+            self.store.cache(url, data)
+            return data
+
+    def start(self):
+        """
+        Starting http service.
+        """
+        while True:
+            client_socket, address = self.socket.accept()
+            req = client_socket.recv(4096).decode('utf-8')
+            url = extract_url(req)
+
+            if url == '/grading/beacon':
+                data = 'HTTP/1.1 204 No Content\r\n'.encode('utf-8')
+                client_socket.sendall(data)
+                client_socket.close()
+                continue
+
+            if '/test/' in url:
+                # /test/8.8.8.8
+                data = rtt(url.replace("/test/", "").replace('-', '.'))
+                wrap_data = ('HTTP/1.1 200 OK\r\n' + 'Content-Length: ' + str(len(data)) + '\r\n\r\n').encode(
+                    'utf-8') + data
+                client_socket.sendall(wrap_data)
+                client_socket.close()
+                continue
+
+            try:
+                data = self.answer(url)
+                wrap_data = ('HTTP/1.1 200 OK\r\n' + 'Content-Length: ' + str(len(data)) + '\r\n\r\n').encode(
+                    'utf-8') + data
+                client_socket.sendall(wrap_data)
+            except HTTPError:
+                wrap_data = ('HTTP/1.1 400 Bad Request\r\n' + '\r\n\r\n').encode(
+                    'utf-8')
+                client_socket.sendall(wrap_data)
+            client_socket.close()
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 5:
+        print('The argument should follow the format: ./httpserver -p <port> -o <origin>')
+    HTTPServer(sys.argv[2], sys.argv[4]).start()

@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+
+replica = ["p5-http-a.5700.network", "p5-http-b.5700.network", "p5-http-c.5700.network", "p5-http-d.5700.network",
+           "p5-http-e.5700.network", "p5-http-f.5700.network", "p5-http-g.5700.network"]
+
+dnsNode = "p5-dns.5700.network"
+
+if len(sys.argv) == 11 and sys.argv[1] == '-p' and sys.argv[3] == '-o' and sys.argv[5] == '-n' and sys.argv[
+    7] == '-u' and sys.argv[9] == '-i':
+    port = sys.argv[2]
+    origin = sys.argv[4]
+    name = sys.argv[6]
+    username = sys.argv[8]
+    keyfile = sys.argv[10]
+
+    os.system("echo Running replica....")
+
+    for x in replica:
+        #
+        ssh = "ssh -i " + keyfile + " " + username + "@" + x + ' '
+        os.system(
+            ssh + "'" + 'cd ~/httpService; nohup python3 ~/httpService/httpserver -p ' + port + ' -o ' + origin + " >/dev/null 2>&1 &'")
+        os.system("echo Replica up:" + x)
+
+    os.system("echo Running dns....")
+    ssh = "ssh -i " + keyfile + " " + username + "@" + dnsNode + ' '
+    os.system(ssh + "'" + 'nohup python3 ~/cdn/dnsserver -p ' + port + ' -n ' + name + " >/dev/null 2>&1 &'")
+    os.system("echo DNS node up.")
+    os.system("echo Running finished....")

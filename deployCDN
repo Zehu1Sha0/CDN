@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+
+replica = ["p5-http-a.5700.network", "p5-http-b.5700.network", "p5-http-c.5700.network", "p5-http-d.5700.network",
+           "p5-http-e.5700.network", "p5-http-f.5700.network", "p5-http-g.5700.network"]
+
+dnsNode = "p5-dns.5700.network"
+
+if len(sys.argv) == 11 and sys.argv[1] == '-p' and sys.argv[3] == '-o' and sys.argv[5] == '-n' and sys.argv[
+    7] == '-u' and sys.argv[9] == '-i':
+    port = sys.argv[2]
+    origin = sys.argv[4]
+    name = sys.argv[6]
+    username = sys.argv[8]
+    keyfile = sys.argv[10]
+    http_path = '~/httpService'
+
+    os.system("echo Deploy start....")
+
+    for x in replica:
+        os.system("echo Replica syncing:" + x)
+        ssh = "ssh -i " + keyfile + " " + username + "@" + x + ' '
+        os.system(ssh + "'" + 'rm -rf ' + http_path + "'")
+        os.system(ssh + "'" + 'mkdir ' + http_path + "'")
+        scp = "scp -i " + keyfile + ' -r httpserver fetch pageviews.csv ' + username + '@' + x + ":" + http_path
+        os.system(scp)
+        os.system(ssh + "'" + 'chmod u+x ' + http_path + '/httpserver' + "'")
+        os.system(ssh + "'" + 'chmod u+x ' + http_path + '/fetch' + "'")
+        os.system("echo Fetching data:" + x)
+        os.system(ssh + "'" + 'mkdir ' + http_path + '/cache' + "'")
+        os.system(ssh + "'cd ~/httpService; ~/httpService/fetch'")
+    os.system("echo Replica sync finished.")
+    os.system("echo Resolver syncing...")
+    ssh = "ssh -i " + keyfile + " " + username + "@" + dnsNode + ' '
+    os.system(ssh + "'" + 'rm -rf ~/cdn' + "'")
+    os.system(ssh + "'" + 'mkdir ~/cdn' + "'")
+    scp = "scp -i" + keyfile + ' -r ' + ' dnsserver ' + username + '@' + dnsNode + ":~/cdn"
+    os.system(scp)
+    os.system("echo Resolver sync finished.")
+    os.system("echo Deploy end.")

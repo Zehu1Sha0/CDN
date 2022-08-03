@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+
+replica = ["p5-http-a.5700.network", "p5-http-b.5700.network", "p5-http-c.5700.network", "p5-http-d.5700.network",
+           "p5-http-e.5700.network", "p5-http-f.5700.network", "p5-http-g.5700.network"]
+dnsNode = "p5-dns.5700.network"
+
+if len(sys.argv) == 11 and sys.argv[1] == '-p' and sys.argv[3] == '-o' and sys.argv[5] == '-n' and sys.argv[
+    7] == '-u' and sys.argv[9] == '-i':
+    port = sys.argv[2]
+    origin = sys.argv[4]
+    name = sys.argv[6]
+    username = sys.argv[8]
+    keyfile = sys.argv[10]
+
+    os.system('echo Replica stopping...')
+    for x in replica:
+        os.system("ssh -i " + keyfile + " " + username + "@" + x + " 'killall -9 -u " + username + "'")
+        os.system('echo Replica ' + x + ' stops.')
+
+    os.system('echo DNS resolver stopping...')
+    os.system("ssh -i " + keyfile + " " + username + "@" + dnsNode + " 'killall -9 -u " + username + "'")
+    os.system('echo DNS resolver stops.')

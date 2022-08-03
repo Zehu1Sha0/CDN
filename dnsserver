@@ -1,0 +1,88 @@
+#!/usr/bin/python
+
+import http.client
+import socket
+import struct
+import sys
+
+portNumber = 40013
+httpPortNumber = 40013
+replica = ["50.116.41.109", "45.33.50.187", "194.195.121.150", "172.104.144.157", "172.104.110.211", "88.80.186.80",
+           "172.105.55.115"]
+sourceIpDict = {}
+
+
+def constructResponse(bestIp, data):
+    header = data[0:12]
+    header_res = struct.unpack('!HHHHHH', header)
+    id = header_res[0]
+    quCount = header_res[2]
+    aucount = header_res[4]
+    addcount = header_res[5]
+    totalheader = struct.pack('!HHHHHH', id, 0x8180, quCount, 1, aucount, addcount)
+    question = data[12:]
+    i = 1
+    dname = ""
+    while True:
+        d = question[i]
+        if d == 0:
+            break
+        if d < 32:
+            dname += "."
+        else:
+            dname = dname + chr(question[i])
+        i = i + 1
+    endindex = i + 5
+    question = data[12:12 + endindex]
+    intData = socket.inet_aton(bestIp)
+    answer = struct.pack('!HHHLH4s', 0xC00C, 0x0001, 0x0001, 60, len(intData), intData)
+    return totalheader + question + answer + data[12 + endindex:]
+
+
+def getRtt(replicaIp, sourceIp):
+    global sourceIpDict
+    try:
+        connection = http.client.HTTPConnection(replicaIp, httpPortNumber)
+        url = "/test/" + str(sourceIp).replace('.', '-')
+        connection.request("GET", url)
+        rtt = connection.getresponse().read()
+        if sourceIpDict.get(sourceIp, -1) == -1:
+            sourceIpDict[sourceIp] = replicaIp + "," + str(rtt)
+        else:
+            if float(rtt) < float(sourceIpDict[sourceIp].split(",")[1]):
+                sourceIpDict[sourceIp] = replicaIp + "," + str(rtt)
+    except Exception:
+        print("cannot connect" + replicaIp)
+        return
+
+
+def searchBestIp(data, dnsSock):
+    sourceIp = data[1][0]
+    sourceAQuery = data[0]
+    if sourceIpDict.get(sourceIp, -1) == -1:
+        for x in range(len(replica)):
+            getRtt(replica[x], sourceIp)
+        bestIp = sourceIpDict[sourceIp].split(",")[0]
+    else:
+        bestIp = sourceIpDict[sourceIp].split(",")[0]
+    answer = constructResponse(bestIp, sourceAQuery)
+    dnsSock.sendto(answer, data[1])
+
+
+if len(sys.argv) == 5 and sys.argv[1] == '-p' and sys.argv[3] == '-n':
+    portNumber = int(sys.argv[2])
+    cdnName = sys.argv[4]
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, 0)
+    sock.connect(("www.google.com", 80))
+    dnsIp = sock.getsockname()[0]
+    print(dnsIp)
+    dnsSock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        dnsSock.bind((dnsIp, portNumber))
+    except socket.error as msg:
+        print("socket binding error: " + str(msg) + "\n")
+        sys.exit()
+
+    while True:
+        data = dnsSock.recvfrom(1024)
+        searchBestIp(data, dnsSock)

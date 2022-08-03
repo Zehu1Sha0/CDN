@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+import csv
+import gzip
+import os
+import urllib.request
+import urllib.parse
+import hashlib
+
+THRESH_HOLD = 1024 * 1024 * 20
+ORIGIN = 'cs5700cdnorigin.ccs.neu.edu'
+CACHE_FOLDER = './cache/'
+
+
+def update_sha(filepath, sha):
+    """
+    To replace the url with a proper encoding that allows the content being placed inside the cache folder.
+    :param filepath: the url for encode
+    :param sha: the encoding algorithm
+    :return: the encoded url
+    """
+    sha.update(filepath.encode('utf-8'))
+    return sha.hexdigest()
+
+
+def get_current_size(path='./'):
+    """
+    https://stackoverflow.com/questions/1392413/calculating-a-directorys-size-using-python
+    :param path: current running path .
+    :return: the size of current path to limits the disk usage.
+    """
+    total = 0
+    for entry in os.scandir(path):
+        if entry.is_file():
+            total += entry.stat().st_size
+        elif entry.is_dir():
+            total += get_current_size(entry.path)
+    return total
+
+
+with open('./pageviews.csv') as csv_file:
+    size = get_current_size()
+    csv_reader = csv.reader(csv_file, delimiter=',')
+    for row in csv_reader:
+
+        url = urllib.parse.quote(row[0])
+        req_body = 'http://' + ORIGIN + ':8080/' + url
+        file_path = update_sha(url, hashlib.sha1())
+        path = CACHE_FOLDER + file_path + '.gz'
+        data = urllib.request.urlopen(req_body).read()
+        if size + len(data) > THRESH_HOLD:
+            break
+        file = gzip.open(path, 'wb')
+        file.write(data)
+        file.close()
+        size += os.path.getsize(path)

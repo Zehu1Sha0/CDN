@@ -1,0 +1,62 @@
+TOP CDN
+
+1. Overview of the project
+This assignment includes the following components:
+1) DNS Resolver
+Using the DNS record name for DNS resolve, the server will map the request of current url, extract domains, and return
+IP address to the target.
+2) HTTP server
+Use as the caching server to reply the request of the client. The DNS resolver will map the client to the nearby server
+and then the server will handle the request from the client.
+3) Run/Stop/Deploy scripts
+The deploy script will automatically download the resource and upload the required script file into the destination
+server. It prepares for the environment for the run scripts.
+The run script will handle each run of the server. It will firstly start will replica http server and then start the
+dns resolver.
+The stop script will kill all services in current deployed machine.
+
+2. High-Level Approach
+1) DNS Server
+1. provide the best server ip that has the shortest response time：
+   use http.client.Httpconnection and request() to connect with replica server
+   calculate time between sending and receiving connection, comparing each time when connecting every replica.
+   then find the minimum of all response time, acquiring its ip address.
+2. parse A queries and response it:
+   use struct.unpack() to get transaction id, flag, question number, authority number, additional number.
+   use struct.pack() to assemble response message with id, flags, questions, answer rrs, authority rrs and addtional rrs.
+3. use sendto() to send response message to client
+4. handle the exception when some nodes down to avoid whole server breaks down
+   determine whether the best ip has exited to avoid null point exception
+2) HTTP Server
+The http server handle the requests from the client and reply with the caching contents. The caching is separated into
+two parts, the first one is the in-disk caches. That is based on the frequency of the service. The second part is
+in-memory caching, which uses LRU for replacement of the least used data.
+The in-disk data will not be replaced due to the request is based on the popularity. The in-memory cache storage will be
+replaced once the threshold is reached.
+In order to allow the dns server to probe the best performance replica, the HTTP server provides a probing method based
+on scamper. It will test the round trip time from current server to the http client, and the dns resolver will use the
+time to map the best server to the client.
+The server will listen to client socket's connection on serving the content. Once a connection is built, the http server
+will return the content the client request by looking at the caching and fetch the missing page.
+3) Deploy/Run/Stop scripts
+The deploy script will first remove all content of the current user and then upload the execution script to the server.
+After upload the script and the pagereview file, the server will fetch the most popular content to the http server and
+the server will be able to get the compressed data file from the preload cache.
+
+3. Challenges
+1) Assembling response message
+To test the assembled message is the most difficult part in this project. It is hard to find out the actual cause of
+bugs as the message is not human readable. We use wireshark for decoding the dns look up and find out the incorrect
+packet we send.
+2) Test receiving and sending message
+As this assignment requires deployment inside a distributed system, the dns resolver rely on actual probing from the
+http client. In the distributed system level, the debugging process is more tougher than in single machine. Deployment
+scripts helps us in handling the complexity. However, once the server quit, it is hard to detect the actual reason.
+We deploy the service manually in debugging and use print and log to detect the problem.
+3) http cache replacement
+The most challenging part in the http server implementation is on the http cache replacement. The caching content should
+be replaced at certain amount of time, and the request is requested with popularity count. Also, considering the content
+is not fully listed inside the pageviews, we still need to prepare for request other than the content. So in the cache
+replacement, we choose to download most visited pages at the time the server starts, and then use the LRU cache
+replacement algorithm to replace the least frequent data. In this way, although the deployment will consume more time,
+the content serving will be able to quicker with preloading content.
